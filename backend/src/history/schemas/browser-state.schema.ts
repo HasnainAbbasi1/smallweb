@@ -8,11 +8,11 @@ export class HistoryEntry {
   @Prop({
     type: Types.ObjectId,
     ref: 'Site',
-    required: true,
+    default: null,
   })
-  siteId: Types.ObjectId;
+  siteId: Types.ObjectId | null;
 
-  @Prop({ required: true })
+  @Prop({ type: String, required: true })
   address: string;
 
   @Prop({ type: Date, default: Date.now })
@@ -20,6 +20,9 @@ export class HistoryEntry {
 
   @Prop({ type: Number, default: 0, min: 0 })
   scrollY: number;
+
+  @Prop({ type: Boolean, default: false })
+  isBroken: boolean;
 }
 
 export const HistoryEntrySchema =

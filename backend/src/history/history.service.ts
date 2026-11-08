@@ -1,8 +1,10 @@
+
 import {
   Injectable,
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -41,36 +43,46 @@ export class HistoryService {
       throw new NotFoundException('Person not found');
     }
 
-    return this.browserStateModel.findOneAndUpdate(
+    const state = await this.browserStateModel.findOneAndUpdate(
       { personId: new Types.ObjectId(personId) },
-      { $setOnInsert: { personId: new Types.ObjectId(personId) } },
-      { upsert: true, new: true },
+      {
+        $setOnInsert: {
+          personId: new Types.ObjectId(personId),
+        },
+      },
+      {
+        upsert: true,
+        new: true,
+      },
     );
+
+    return state;
   }
 
-  // Navigate to a website
+  // Navigate to a website, including broken addresses
   async navigate(personId: string, address: string) {
+    if (typeof address !== 'string' || !address.trim()) {
+      throw new BadRequestException('Address is required');
+    }
+
     const normalizedAddress = address.trim().toLowerCase();
+
+    const state = await this.getOrCreateState(personId);
 
     const site = await this.siteModel.findOne({
       address: normalizedAddress,
     });
 
-    if (!site) {
-      throw new NotFoundException('Website not found');
-    }
+    // Remove forward history after a new navigation
+    state.entries.splice(state.currentIndex + 1);
 
-    const state = await this.getOrCreateState(personId);
-
-    // Remove forward history when navigating to a new page
-    state.entries = state.entries.slice(0, state.currentIndex + 1) as any;
-
-    // Add new visit
+    // Save the visit even if the website does not exist
     state.entries.push({
-      siteId: site._id,
-      address: site.address,
+      siteId: site?._id ?? null,
+      address: normalizedAddress,
       visitedAt: new Date(),
       scrollY: 0,
+      isBroken: !site,
     } as any);
 
     state.currentIndex = state.entries.length - 1;
@@ -78,60 +90,71 @@ export class HistoryService {
     await state.save();
 
     return {
-      message: 'Navigation successful',
+      message: site
+        ? 'Navigation successful'
+        : 'Website not found. Address saved in history.',
       currentIndex: state.currentIndex,
       currentPage: site,
+      isBroken: !site,
       history: state.entries,
     };
   }
 
-  // Go back
+  // Go back to the previous page
   async goBack(personId: string) {
     const state = await this.getOrCreateState(personId);
 
     if (state.currentIndex <= 0) {
-      throw new BadRequestException('No previous page available');
+      throw new BadRequestException(
+        'No previous page available',
+      );
     }
 
     state.currentIndex -= 1;
+
     await state.save();
 
     const entry = state.entries[state.currentIndex];
-    const site = await this.siteModel.findById(entry.siteId);
 
-    if (!site) {
-      throw new NotFoundException('Website no longer exists');
-    }
+    const site = entry.siteId
+      ? await this.siteModel.findById(entry.siteId)
+      : null;
 
     return {
       currentIndex: state.currentIndex,
       currentPage: site,
+      address: entry.address,
       scrollY: entry.scrollY,
+      isBroken: !site,
     };
   }
 
-  // Go forward
+  // Go forward to the next page
   async goForward(personId: string) {
     const state = await this.getOrCreateState(personId);
 
     if (state.currentIndex >= state.entries.length - 1) {
-      throw new BadRequestException('No next page available');
+      throw new BadRequestException(
+        'No next page available',
+      );
     }
 
     state.currentIndex += 1;
+
     await state.save();
 
     const entry = state.entries[state.currentIndex];
-    const site = await this.siteModel.findById(entry.siteId);
 
-    if (!site) {
-      throw new NotFoundException('Website no longer exists');
-    }
+    const site = entry.siteId
+      ? await this.siteModel.findById(entry.siteId)
+      : null;
 
     return {
       currentIndex: state.currentIndex,
       currentPage: site,
+      address: entry.address,
       scrollY: entry.scrollY,
+      isBroken: !site,
     };
   }
 
@@ -145,22 +168,33 @@ export class HistoryService {
     };
   }
 
-  // Update scroll position of current page
+  // Update scroll position of the current page
   async updateScroll(personId: string, scrollY: number) {
-    if (!Number.isFinite(scrollY) || scrollY < 0) {
-      throw new BadRequestException('Invalid scroll position');
+    if (
+      typeof scrollY !== 'number' ||
+      !Number.isFinite(scrollY) ||
+      scrollY < 0
+    ) {
+      throw new BadRequestException(
+        'Invalid scroll position',
+      );
     }
 
     const state = await this.getOrCreateState(personId);
 
     if (state.currentIndex < 0) {
-      throw new BadRequestException('No page currently open');
+      throw new BadRequestException(
+        'No page currently open',
+      );
     }
 
     state.entries[state.currentIndex].scrollY = scrollY;
 
     await state.save();
 
-    return { message: 'Scroll position saved', scrollY };
+    return {
+      message: 'Scroll position saved',
+      scrollY,
+    };
   }
 }
